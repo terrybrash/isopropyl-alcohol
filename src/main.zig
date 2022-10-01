@@ -2,17 +2,6 @@ const w4 = @import("wasm4.zig");
 const math = @import("zlm.zig");
 const atlas = @import("atlas.zig");
 
-const smiley = [8]u8{
-    0b11000011,
-    0b10000001,
-    0b00100100,
-    0b00100100,
-    0b00000000,
-    0b00100100,
-    0b10011001,
-    0b11000011,
-};
-
 const Sound = struct {
     freq1: u32,
     freq2: u32,
@@ -53,18 +42,11 @@ export fn update() void {
     now += 1.0 / 60.0;
 
     w4.PALETTE.* = .{
-        0xfff6d3,
-        0xf9a875,
-        0xeb6b6f,
-        0x7c3f58,
+        0xfff6d3, // yellow
+        0xf9a875, // orange
+        0xeb6b6f, // red
+        0x7c3f58, // brown
     };
-
-    // w4.PALETTE.* = .{
-    //     0x788374,
-    //     0xf5e9bf,
-    //     0xaa644d,
-    //     0x372a39,
-    // };
 
     w4.DRAW_COLORS.* = 0x03;
     // w4.DRAW_COLORS.* = 2;
@@ -87,14 +69,18 @@ export fn update() void {
     }
     if (gamepad & w4.BUTTON_1 != 0) {
         w4.DRAW_COLORS.* = 0x01;
-        if (now - last_blip > 0.35) {
+        if (now - last_blip > 0.50) {
             play(blip);
             last_blip = now;
         }
     }
 
     // w4.blit(&smiley, 76, 76, 8, 8, w4.BLIT_1BPP);
-    // w4.DRAW_COLORS.* = 0x3210;
-    w4.blit(&atlas.data, 76, 76, atlas.width, atlas.height, atlas.flags);
+    w4.DRAW_COLORS.* = 4;
+    // w4.rect(79, 79, 20, 20);
+    w4.DRAW_COLORS.* = 0x4321;
+    // w4.blit(&atlas.data, 80 + @floatToInt(i32, player.x), 80 + @floatToInt(i32, player.y), atlas.width, atlas.height, atlas.flags);
+    // const size = 16;
+    w4.blitSub(&atlas.data, 80, 80, 8, 8, 0, 0, atlas.width, atlas.flags);
     // w4.text("Press X to blink", 16, 90);
 }
