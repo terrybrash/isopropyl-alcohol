@@ -40,6 +40,7 @@ const Player = struct {
     position: Vec2,
     gamepad: *const u8,
     connected: bool,
+    alive: bool,
 };
 
 const Projectile = struct {
@@ -48,34 +49,40 @@ const Projectile = struct {
     lifetime: f32,
     born: f32,
     radius: u16,
+    owner: usize,
 };
 
 var now: f32 = 0;
 var last_blip: f32 = 0;
 
-const player_radius = 5;
+const player_radius: u16 = 5;
 
 var players = [4]Player{ .{
     .position = Vec2.new(40, 40),
     .gamepad = w4.GAMEPAD1,
     .connected = true,
+    .alive = true,
 }, .{
     .position = Vec2.new(-40, -40),
     .gamepad = w4.GAMEPAD2,
     .connected = true,
+    .alive = true,
 }, .{
     .position = Vec2.new(40, -40),
     .gamepad = w4.GAMEPAD3,
     .connected = false,
+    .alive = true,
 }, .{
     .position = Vec2.new(-40, 40),
     .gamepad = w4.GAMEPAD4,
     .connected = false,
+    .alive = true,
 } };
 
 var attacker: usize = 0;
 var power: f32 = 0;
 var turn_elapsed: f32 = 0;
+const turn_time = 10.0;
 
 // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 // const allocator = arena.allocator();
@@ -113,25 +120,40 @@ export fn update() void {
         w4.oval(@floatToInt(i32, center.x) - 2, @floatToInt(i32, center.y) - 2, 5, 5);
     }
 
-    {
-        w4.DRAW_COLORS.* = 0x3;
-        w4.text("power", 2, 3);
-        var i: u16 = 0;
-        const height = 10;
-        const width = 4;
-        const bars = 10;
-        const offset = 40;
-        while (i < bars) : (i += 1) {
-            w4.rect(offset + width * i, height - i - 1, width, i + 1);
+    if (turn_elapsed >= turn_time) {
+        turn_elapsed -= turn_time;
+        power = 0;
+        attacker = @mod(attacker + 1, players.len);
+        while (true) {
+            if (players[attacker].connected and players[attacker].alive) {
+                break;
+            }
+            attacker = @mod(attacker + 1, players.len);
         }
-        w4.DRAW_COLORS.* = 0x4;
-        const p = @floatToInt(u16, power * width * bars);
-        w4.line(offset + p, 0, offset + p, height);
     }
 
     {
         w4.DRAW_COLORS.* = 0x3;
-        w4.text("turn 8", 2, 150);
+        w4.text("power", 74, 150);
+        var i: u16 = 0;
+        const height = 10;
+        const width = 4;
+        const bars = 10;
+        const offset_x = 116;
+        const offset_y = 147;
+        while (i < bars) : (i += 1) {
+            w4.rect(offset_x + width * i, offset_y + height - i - 1, width, i + 1);
+        }
+        w4.DRAW_COLORS.* = 0x4;
+        const p = @floatToInt(u16, power * width * bars);
+        w4.line(offset_x + p, offset_y, offset_x + p, offset_y + height);
+    }
+
+    {
+        w4.DRAW_COLORS.* = 0x3;
+        var buf: [12]u8 = undefined;
+        var result = std.fmt.bufPrint(&buf, "time {}", .{@floatToInt(u32, std.math.floor(turn_time - turn_elapsed))}) catch unreachable;
+        w4.text(result, 2, 150);
         // w4.text();
         // var i: u16 = 0;
         // const height = 10;
@@ -146,25 +168,15 @@ export fn update() void {
         // w4.line(offset + p, 0, offset + p, height);
     }
 
-    const turn_time = 10.0;
-    if (turn_elapsed >= turn_time) {
-        turn_elapsed -= turn_time;
-        power = 0;
-        attacker = @mod(attacker + 1, players.len);
-        while (true) {
-            if (players[attacker].connected) {
-                break;
-            }
-            attacker = @mod(attacker + 1, players.len);
-        }
-    }
-
     for (players) |*player, i| {
         const gamepad = player.gamepad.*;
         if (gamepad != 0) {
             player.connected = true;
         }
         if (!player.connected) {
+            continue;
+        }
+        if (!player.alive) {
             continue;
         }
 
@@ -222,6 +234,7 @@ export fn update() void {
                     .lifetime = 0.5,
                     .born = now,
                     .radius = 3,
+                    .owner = i,
                 }) catch unreachable;
                 power = 0;
             }
@@ -229,9 +242,8 @@ export fn update() void {
     }
 
     var p = projectiles.len;
-    while (p > 0) {
+    outer: while (p > 0) {
         p -= 1;
-        // w4.trace("item");
         var projectile = projectiles.get(p);
         var t = (now - projectile.born) / projectile.lifetime;
         if (t >= 1.0) {
@@ -239,7 +251,20 @@ export fn update() void {
             continue;
         }
 
-        var center = Vec2.lerp(projectile.start, projectile.end, easeOutSine(t)).add(camera);
+        var center = Vec2.lerp(projectile.start, projectile.end, easeOutSine(t));
+        for (players) |*player, i| {
+            if (!player.connected or !player.alive or projectile.owner == i) {
+                continue;
+            }
+            if (center.sub(player.position).length() < @intToFloat(f32, projectile.radius + player_radius)) {
+                player.alive = false;
+                _ = projectiles.swapRemove(p);
+                continue :outer;
+            }
+        }
+        
+        center = center.add(camera);
+
         w4.oval(@floatToInt(i32, center.x) - projectile.radius, @floatToInt(i32, center.y) - projectile.radius, projectile.radius * 2, projectile.radius * 2);
     }
 
