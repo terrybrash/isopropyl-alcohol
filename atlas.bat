@@ -1,0 +1,1 @@
+w4 png2src -t template.mustache --output src/atlas.zig atlas.png
