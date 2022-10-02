@@ -24,87 +24,116 @@ fn play(s: Sound) void {
     w4.tone(freq, duration, s.volume, flags);
 }
 
-const blip = Sound{
-    .freq1 = 280,
-    .freq2 = 370,
-    .attack = 10,
-    .decay = 0,
-    .sustain = 4,
-    .release = 0,
-    .volume = 8,
-    .channel = 4,
-    .mode = 0,
+const sound = .{
+    .shoot = Sound{
+        .freq1 = 830,
+        .freq2 = 30,
+        .attack = 0,
+        .decay = 0,
+        .sustain = 4,
+        .release = 15,
+        .volume = 50,
+        .channel = 3,
+        .mode = 0,
+    },
+    .hit = Sound{
+        .freq1 = 830,
+        .freq2 = 30,
+        .attack = 0,
+        .decay = 12,
+        .sustain = 0,
+        .release = 0,
+        .volume = 50,
+        .channel = 3,
+        .mode = 0,
+    },
 };
 
 const Player = struct {
     position: Vec2,
-    gamepad: *const u8,
-    connected: bool,
     alive: bool,
 };
 
 const Projectile = struct {
     start: Vec2,
     end: Vec2,
+    center: Vec2,
     lifetime: f32,
     born: f32,
     radius: u16,
     owner: usize,
 };
 
-var now: f32 = 0;
-var last_blip: f32 = 0;
+const Controller = struct {
+    gamepad: *const u8,
+    connected: bool,
+};
 
+const turn_time = 10.0; // EVERY 10 SECONDS
+const camera = Vec2.new(160 / 2, 160 / 2);
+const ring_radius = 70;
 const player_radius: u16 = 5;
 
-var players = [4]Player{ .{
-    .position = Vec2.new(40, 40),
+var controllers = [4]Controller{ .{
     .gamepad = w4.GAMEPAD1,
     .connected = true,
-    .alive = true,
 }, .{
-    .position = Vec2.new(-40, -40),
     .gamepad = w4.GAMEPAD2,
-    .connected = true,
-    .alive = true,
+    .connected = false,
 }, .{
-    .position = Vec2.new(40, -40),
     .gamepad = w4.GAMEPAD3,
     .connected = false,
-    .alive = true,
 }, .{
-    .position = Vec2.new(-40, 40),
     .gamepad = w4.GAMEPAD4,
     .connected = false,
-    .alive = true,
 } };
 
-var attacker: usize = 0;
-var power: f32 = 0;
-var turn_elapsed: f32 = 0;
-const turn_time = 10.0;
 
-// var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-// const allocator = arena.allocator();
+const Game = struct {
+    players: [4]Player,
+    attacker: usize,
+    power: f32,
+    turn_elapsed: f32,
+    projectiles: std.BoundedArray(Projectile, 100),
+    restart: ?f32,
+    now: f32,
+    last_tick: f32,
 
-// const State = struct{
-//     projectiles: std.BoundedArray(Projectile, 100),
-// };
+    fn new(seed: f32) Game {
+        // std.rand.DefaultPrng.random().
+        var attacker = @mod(@floatToInt(u32, seed), controllers.len);
 
-var projectiles = std.BoundedArray(Projectile, 100).init(0) catch unreachable;
-var camera = Vec2.new(160 / 2, 160 / 2);
+        return Game{
+            .players = [4]Player{ .{
+                .position = Vec2.new(40, 40),
+                .alive = true,
+            }, .{
+                .position = Vec2.new(-40, -40),
+                .alive = true,
+            }, .{
+                .position = Vec2.new(40, -40),
+                .alive = true,
+            }, .{
+                .position = Vec2.new(-40, 40),
+                .alive = true,
+            } },
+            .attacker = attacker,
+            .power = 0,
+            .turn_elapsed = 0,
+            .projectiles = std.BoundedArray(Projectile, 100).init(0) catch unreachable,
+            .restart = null,
+            .now = 0,
+            .last_tick = 0,
+        };
+    }
+};
 
-// fn circle(x: f32, y: f32, radius) {
-// }
+var game = Game.new(0);
 
-// export fn start() void {
-//     w4.trace("test");
-// }
-const ring_radius = 70;
 export fn update() void {
     const dt = 1.0 / 60.0;
-    now += dt;
-    turn_elapsed += dt;
+    game.now += dt;
+    game.turn_elapsed += dt;
 
     w4.PALETTE.* = .{
         0xfff6d3, // yellow
@@ -112,6 +141,28 @@ export fn update() void {
         0xeb6b6f, // red
         0x7c3f58, // brown
     };
+        
+    while (true) {
+        if (controllers[game.attacker].connected and game.players[game.attacker].alive) {
+            break;
+        }
+        game.attacker = @mod(game.attacker + 1, controllers.len);
+    }
+
+    while (game.now - game.last_tick >= 1.0) {
+        game.last_tick += 1;
+        play(.{
+            .freq1 = 550,
+            .freq2 = 0,
+            .attack = 0,
+            .decay = 3,
+            .sustain = 0,
+            .release = 4,
+            .volume = 13,
+            .channel = 2,
+            .mode = 1,
+        });
+    }
 
     {
         w4.DRAW_COLORS.* = 0x1;
@@ -120,16 +171,29 @@ export fn update() void {
         w4.oval(@floatToInt(i32, center.x) - 2, @floatToInt(i32, center.y) - 2, 5, 5);
     }
 
-    if (turn_elapsed >= turn_time) {
-        turn_elapsed -= turn_time;
-        power = 0;
-        attacker = @mod(attacker + 1, players.len);
+    if (game.turn_elapsed >= turn_time) {
+        game.turn_elapsed -= turn_time;
+        game.power = 0;
+        game.attacker = @mod(game.attacker + 1, game.players.len);
         while (true) {
-            if (players[attacker].connected and players[attacker].alive) {
+            const player = game.players[game.attacker];
+            const controller = controllers[game.attacker];
+            if (controller.connected and player.alive) {
                 break;
             }
-            attacker = @mod(attacker + 1, players.len);
+            game.attacker = @mod(game.attacker + 1, game.players.len);
         }
+        play(.{
+            .freq1 = 600,
+            .freq2 = 900,
+            .attack = 0,
+            .decay = 0,
+            .sustain = 5,
+            .release = 10,
+            .volume = 50,
+            .channel = 0,
+            .mode = 3,
+        });
     }
 
     {
@@ -145,60 +209,43 @@ export fn update() void {
             w4.rect(offset_x + width * i, offset_y + height - i - 1, width, i + 1);
         }
         w4.DRAW_COLORS.* = 0x4;
-        const p = @floatToInt(u16, power * width * bars);
+        const p = @floatToInt(u16, game.power * width * bars);
         w4.line(offset_x + p, offset_y, offset_x + p, offset_y + height);
     }
 
     {
         w4.DRAW_COLORS.* = 0x3;
         var buf: [12]u8 = undefined;
-        var result = std.fmt.bufPrint(&buf, "time {}", .{@floatToInt(u32, std.math.floor(turn_time - turn_elapsed))}) catch unreachable;
+        var result = std.fmt.bufPrint(&buf, "time {}", .{@floatToInt(u32, std.math.floor(turn_time - game.turn_elapsed))}) catch unreachable;
         w4.text(result, 2, 150);
-        // w4.text();
-        // var i: u16 = 0;
-        // const height = 10;
-        // const width = 4;
-        // const bars = 10;
-        // const offset = 40;
-        // while (i < bars) : (i += 1) {
-        //     w4.rect(offset + width * i, height - i - 1, width, i + 1);
-        // }
-        // w4.DRAW_COLORS.* = 0x4;
-        // const p = @floatToInt(u16, power * width * bars);
-        // w4.line(offset + p, 0, offset + p, height);
     }
 
-    for (players) |*player, i| {
-        const gamepad = player.gamepad.*;
+    for (game.players) |*player, i| {
+        const gamepad = controllers[i].gamepad.*;
         if (gamepad != 0) {
-            player.connected = true;
+            controllers[i].connected = true;
         }
-        if (!player.connected) {
+        if (!controllers[i].connected) {
             continue;
         }
         if (!player.alive) {
+            w4.DRAW_COLORS.* = 0x40;
+            const pos = Vec2.add(player.position, camera);
+            w4.oval(@floatToInt(i32, pos.x) - player_radius, @floatToInt(i32, pos.y) - player_radius, player_radius * 2, player_radius * 2);
             continue;
         }
 
-        if (attacker == i) {
+        if (game.attacker == i) {
             w4.DRAW_COLORS.* = 0x3;
         } else {
             w4.DRAW_COLORS.* = 0x2;
         }
 
-        if (attacker == i) {
+        if (game.attacker == i) {
             const start = Vec2.add(player.position, camera);
             const end = Vec2.add(Vec2.zero, camera);
             w4.line(@floatToInt(i32, start.x), @floatToInt(i32, start.y), @floatToInt(i32, end.x), @floatToInt(i32, end.y));
-            // w4.DRAW_COLORS.* = 0x33;
             w4.oval(@floatToInt(i32, start.x) - 2, @floatToInt(i32, start.y) - 2, 5, 5);
-        }
-
-        {
-            // w4.DRAW_COLORS.* = 0x3;
-            // const angle = now * std.math.tau * 0.5;
-            // const center = Vec2.new(std.math.cos(angle), std.math.sin(angle)).scale(30).add(camera).add(player.position);
-            // w4.oval(@floatToInt(i32, center.x) - 2, @floatToInt(i32, center.y) - 2, 5, 5);
         }
 
         const pos = Vec2.add(player.position, camera);
@@ -223,62 +270,116 @@ export fn update() void {
             player.position = player.position.normalize().scale(distance);
         }
 
-        if (attacker == i) {
+        if (game.attacker == i) {
             if (gamepad & w4.BUTTON_1 != 0) {
-                power = std.math.min(power + dt, 1);
-            } else if (power > 0) {
-                var playerToTarget = Vec2.sub(Vec2.zero, player.position).normalize().scale(ring_radius * 2 * power);
-                projectiles.append(.{
+                game.power = std.math.min(game.power + dt, 1);
+                play(.{
+                    .freq1 = 300 + @floatToInt(u32, game.power * 500),
+                    .freq2 = 0,
+                    .attack = 0,
+                    .decay = 0,
+                    .sustain = 0,
+                    .release = 14,
+                    .volume = 30 - @floatToInt(u32, game.power * 20),
+                    .channel = 0,
+                    .mode = 1,
+                });
+            } else if (game.power > 0) {
+                var playerToTarget = Vec2.sub(Vec2.zero, player.position).normalize().scale(ring_radius * 2 * game.power);
+                play(.{
+                    .freq1 = 500 + @floatToInt(u32, game.power * 300),
+                    .freq2 = 300 + @floatToInt(u32, game.power * 200),
+                    .attack = 0,
+                    .decay = 5,
+                    .sustain = 0,
+                    .release = 12,
+                    .volume = 30,
+                    .channel = 2,
+                    .mode = 3,
+                });
+                play(.{
+                    .freq1 = 500 + @floatToInt(u32, game.power * 500),
+                    .freq2 = 300 + @floatToInt(u32, game.power * 200),
+                    .attack = 0,
+                    .decay = 0,
+                    .sustain = 5,
+                    .release = 15,
+                    .volume = 80,
+                    .channel = 1,
+                    .mode = 0,
+                });
+                game.projectiles.append(.{
                     .start = player.position,
                     .end = player.position.add(playerToTarget),
+                    .center = player.position,
                     .lifetime = 0.5,
-                    .born = now,
-                    .radius = 3,
+                    .born = game.now,
+                    .radius = 2 + @floatToInt(u16, std.math.round(game.power * 4)),
                     .owner = i,
                 }) catch unreachable;
-                power = 0;
+                game.power = 0;
             }
         }
     }
 
-    var p = projectiles.len;
+    var p = game.projectiles.len;
     outer: while (p > 0) {
         p -= 1;
-        var projectile = projectiles.get(p);
-        var t = (now - projectile.born) / projectile.lifetime;
+        var projectile = game.projectiles.get(p);
+        var t = (game.now - projectile.born) / projectile.lifetime;
         if (t >= 1.0) {
-            _ = projectiles.swapRemove(p);
+            _ = game.projectiles.swapRemove(p);
             continue;
         }
 
         var center = Vec2.lerp(projectile.start, projectile.end, easeOutSine(t));
-        for (players) |*player, i| {
-            if (!player.connected or !player.alive or projectile.owner == i) {
+        for (game.players) |*player, i| {
+            if (!controllers[i].connected or !player.alive or projectile.owner == i) {
                 continue;
             }
             if (center.sub(player.position).length() < @intToFloat(f32, projectile.radius + player_radius)) {
                 player.alive = false;
-                _ = projectiles.swapRemove(p);
+                play(sound.hit);
+                _ = game.projectiles.swapRemove(p);
                 continue :outer;
             }
         }
-        
-        center = center.add(camera);
 
-        w4.oval(@floatToInt(i32, center.x) - projectile.radius, @floatToInt(i32, center.y) - projectile.radius, projectile.radius * 2, projectile.radius * 2);
+        var velocity = center.sub(projectile.center).normalize();
+        projectile.center = center;
+        var i: u16 = 0;
+        w4.DRAW_COLORS.* = 0x33;
+        var radius_offset: f32 = 0;
+        while (i < projectile.radius) : (i += 1) {
+            var r = projectile.radius - i;
+            var tail = velocity.scale(-radius_offset).add(projectile.center).add(camera);
+            radius_offset += @intToFloat(f32, r);
+            w4.oval(@floatToInt(i32, tail.x) - r, @floatToInt(i32, tail.y) - r, r * 2, r * 2);
+        }
     }
 
-    // w4.blit(&smiley, 76, 76, 8, 8, w4.BLIT_1BPP);
-    w4.DRAW_COLORS.* = 4;
-    // w4.rect(79, 79, 20, 20);
-    w4.DRAW_COLORS.* = 0x4321;
-    // w4.blit(&atlas.data, 80 + @floatToInt(i32, player.x), 80 + @floatToInt(i32, player.y), atlas.width, atlas.height, atlas.flags);
-    // const size = 16;
-    // w4.blitSub(&atlas.data, 80, 80, 8, 8, 0, 0, atlas.width, atlas.flags);
-    // w4.text("Press X to blink", 16, 90);
-}
+    if (game.restart == null) {
+        var connected: u32 = 0;
+        var alive: u32 = 0;
+        for (game.players) |player, i| {
+            if (controllers[i].connected) {
+                connected += 1;
+                if (player.alive) {
+                    alive += 1;
+                }
+            }
+        }
+        if (connected > 1 and alive <= 1) {
+            game.restart = game.now + 3;
+        }
+    }
 
-// fn distance(a: Vec2, b: )
+    if (game.restart) |restart| {
+        if (game.now > restart) {
+            game = Game.new(game.now);
+        }
+    }
+}
 
 fn lerp(a: f32, b: f32, t: f32) f32 {
     return a + t * (b - a);
